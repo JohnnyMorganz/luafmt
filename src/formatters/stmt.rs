@@ -11,7 +11,7 @@ use crate::{
     fmt_symbol,
     formatters::{
         assignment::{format_assignment, format_local_assignment},
-        block::format_block,
+        block::{format_block, format_last_stmt_},
         expression::{format_expression, hang_expression_trailing_newline},
         functions::{format_function_call, format_function_declaration, format_local_function},
         general::{
@@ -25,9 +25,12 @@ use crate::{
     shape::Shape,
 };
 use full_moon::ast::{
-    Do, ElseIf, Expression, FunctionCall, GenericFor, If, NumericFor, Repeat, Stmt, Value, While,
+    Block, Do, ElseIf, Expression, FunctionCall, GenericFor, If, NumericFor, Repeat, Stmt, Value,
+    While,
 };
 use full_moon::tokenizer::{Token, TokenReference, TokenType};
+
+use super::trivia_util::contains_comments;
 
 macro_rules! fmt_stmt {
     ($ctx:expr, $value:ident, $shape:ident, { $($(#[$inner:meta])* $operator:ident = $output:ident,)+ }) => {
@@ -195,6 +198,83 @@ fn format_else_if<'ast>(ctx: &Context, else_if_node: &ElseIf<'ast>, shape: Shape
         .with_block(block)
 }
 
+/// Checks to see whether an [`If`] statement matches the structure of an "if guard".
+/// ```lua
+/// if condition then return expr end
+/// ```
+/// If we have an if guard, we can keep the statement single line - provided that a few key observations hold:
+/// - There is no elseif/else block
+/// - The body of the if block only contains a single [`LastStmt`] (note, this LastStmt may have multiple expressions e.g. `return foo, bar`)
+/// - There are no internal comments within the block
+/// We will also check if the statement surpasses the column width, or if the condition required multilining (handled outside of this function)
+fn is_if_guard(if_node: &If) -> bool {
+    let valid_last_stmt = if let Some(last_stmt) = if_node.block().last_stmt() {
+        !contains_comments(last_stmt)
+    } else {
+        false
+    };
+
+    if_node.else_if().is_none()
+        && if_node.else_block().is_none()
+        && if_node.block().stmts().next().is_none()
+        && valid_last_stmt
+        && !contains_comments(if_node.then_token())
+}
+
+/// Formats an if statement onto a single line.
+/// This function performs no checking to see if we *should* do this - it will just return a singleline if statement.
+fn format_singeline_if<'ast>(ctx: &Context, if_node: &If<'ast>, shape: Shape) -> If<'ast> {
+    // Calculate trivia
+    let leading_trivia = vec![create_indent_trivia(ctx, shape)];
+    let trailing_trivia = vec![create_newline_trivia(ctx)];
+
+    let if_token = fmt_symbol!(ctx, if_node.if_token(), "if ", shape)
+        .update_leading_trivia(FormatTriviaType::Append(leading_trivia.to_owned()));
+
+    // Remove parentheses around the condition
+    let condition = remove_condition_parentheses(if_node.condition().to_owned());
+    let condition = format_expression(ctx, &condition, shape + 3); // 3 = "if "
+
+    let then_token = fmt_symbol!(ctx, if_node.then_token(), " then", shape);
+
+    // Don't reset the block shape, as we are keeping the block single line
+    let block_shape = shape
+        + (strip_trivia(&if_token).to_string().len()
+            + 1 // 1 = Space after if
+            + condition.to_string().len()
+            + then_token.to_string().len()
+            + 1); // 1 = Space after then
+
+    // Rather than deferring to `format_block()`, since we know that there is only a single LastStmt in the block, we can format it immediately
+    // We need to modify the formatted LastStmt, since it will have automatically added leading/trailing trivia we don't want
+    // We assume that there is only a laststmt present in the block - the callee of this function should have already checked for this
+    let last_stmt = if_node
+        .block()
+        .last_stmt()
+        .expect("somehow have no last stmt in singleline if");
+    let last_stmt = format_last_stmt_(
+        ctx,
+        last_stmt,
+        block_shape,
+        (
+            FormatTriviaType::Append(vec![Token::new(TokenType::spaces(1))]),
+            FormatTriviaType::Append(vec![Token::new(TokenType::spaces(1))]),
+        ),
+    );
+    let block = Block::new().with_last_stmt(Some((last_stmt, None)));
+
+    let end_token = format_end_token(ctx, if_node.end_token(), EndTokenType::BlockEnd, shape)
+        .update_trailing_trivia(FormatTriviaType::Append(trailing_trivia.to_owned()));
+
+    if_node
+        .to_owned()
+        .with_if_token(if_token)
+        .with_condition(condition)
+        .with_then_token(then_token)
+        .with_block(block)
+        .with_end_token(end_token)
+}
+
 /// Format an If node
 pub fn format_if<'ast>(ctx: &Context, if_node: &If<'ast>, shape: Shape) -> If<'ast> {
     // Calculate trivia
@@ -208,6 +288,19 @@ pub fn format_if<'ast>(ctx: &Context, if_node: &If<'ast>, shape: Shape) -> If<'a
     let singleline_shape = shape + (3 + 5 + strip_trivia(&condition).to_string().len()); // 3 = "if ", 5 = " then"
     let require_multiline_expression = singleline_shape.over_budget()
         || trivia_util::expression_contains_inline_comments(&condition);
+
+    // Handle check to see if we should format the if statement on a single line
+    if !require_multiline_expression && is_if_guard(if_node) {
+        let singleline_if = format_singeline_if(ctx, if_node, shape);
+
+        // See if it fits under the column width. If it does, bail early and return this singleline if
+        if !shape
+            .add_width(strip_trivia(&singleline_if).to_string().len())
+            .over_budget()
+        {
+            return singleline_if;
+        }
+    }
 
     let (if_text, then_text) = if require_multiline_expression {
         ("if\n", "then")

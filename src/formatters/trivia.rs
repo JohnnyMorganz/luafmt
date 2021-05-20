@@ -2,8 +2,8 @@
 use full_moon::ast::types::{IndexedTypeInfo, TypeAssertion, TypeInfo, TypeSpecifier};
 use full_moon::ast::{
     punctuated::Punctuated, span::ContainedSpan, BinOp, Call, Expression, FunctionArgs,
-    FunctionBody, FunctionCall, FunctionName, Index, MethodCall, Parameter, Prefix, Suffix,
-    TableConstructor, UnOp, Value, Var, VarExpression,
+    FunctionBody, FunctionCall, FunctionName, If, Index, LastStmt, MethodCall, Parameter, Prefix,
+    Return, Suffix, TableConstructor, UnOp, Value, Var, VarExpression,
 };
 use full_moon::tokenizer::{Token, TokenReference};
 
@@ -341,6 +341,12 @@ define_update_trivia!(FunctionName, |this, leading, trailing| {
     }
 });
 
+define_update_trivia!(If, |this, leading, trailing| {
+    this.to_owned()
+        .with_if_token(this.if_token().update_leading_trivia(leading))
+        .with_end_token(this.end_token().update_trailing_trivia(trailing))
+});
+
 define_update_trivia!(Index, |this, leading, trailing| {
     match this {
         Index::Brackets {
@@ -354,6 +360,18 @@ define_update_trivia!(Index, |this, leading, trailing| {
             dot: dot.update_leading_trivia(leading),
             name: name.update_trailing_trivia(trailing),
         },
+        other => panic!("unknown node {:?}", other),
+    }
+});
+
+define_update_trivia!(LastStmt, |this, leading, trailing| {
+    match this {
+        LastStmt::Break(token) => LastStmt::Break(token.update_trivia(leading, trailing)),
+        LastStmt::Return(return_node) => {
+            LastStmt::Return(return_node.update_trivia(leading, trailing))
+        }
+        #[cfg(feature = "luau")]
+        LastStmt::Continue(token) => LastStmt::Continue(token.update_trivia(leading, trailing)),
         other => panic!("unknown node {:?}", other),
     }
 });
@@ -426,6 +444,17 @@ where
         punctuated
     }
 }
+
+define_update_trivia!(Return, |this, leading, trailing| {
+    if this.returns().is_empty() {
+        this.to_owned()
+            .with_token(this.token().update_trivia(leading, trailing))
+    } else {
+        this.to_owned()
+            .with_token(this.token().update_leading_trivia(leading))
+            .with_returns(this.returns().update_trailing_trivia(trailing))
+    }
+});
 
 define_update_trivia!(Suffix, |this, leading, trailing| {
     match this {
