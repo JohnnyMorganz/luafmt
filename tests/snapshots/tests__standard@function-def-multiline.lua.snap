@@ -3,8 +3,12 @@ source: tests/tests.rs
 expression: format(&contents)
 
 ---
-function foo(foooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo, barrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr)
-end
+function foo(foooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo, barrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr) end
+
+function foo(
+	foooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo,
+	barrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr
+) end
 
 function foobar(
 	fooooo,
@@ -30,8 +34,7 @@ do
 	function bar(
 		foooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo,
 		barrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr
-	)
-	end
+	) end
 end
 
 local x = {

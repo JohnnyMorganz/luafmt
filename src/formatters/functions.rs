@@ -1,8 +1,8 @@
 use full_moon::ast::{
     punctuated::{Pair, Punctuated},
     span::ContainedSpan,
-    Call, Expression, FunctionArgs, FunctionBody, FunctionCall, FunctionDeclaration, FunctionName,
-    LocalFunction, MethodCall, Parameter, Suffix, Value,
+    Block, Call, Expression, FunctionArgs, FunctionBody, FunctionCall, FunctionDeclaration,
+    FunctionName, LocalFunction, MethodCall, Parameter, Suffix, Value,
 };
 use full_moon::tokenizer::{Symbol, Token, TokenReference, TokenType};
 use std::boxed::Box;
@@ -37,51 +37,9 @@ pub fn format_anonymous_function<'ast>(
     shape: Shape,
 ) -> (TokenReference<'ast>, FunctionBody<'ast>) {
     let function_token = fmt_symbol!(ctx, function_token, "function", shape);
-    let mut function_body = format_function_body(ctx, function_body, false, shape.reset()); // TODO: do we want to reset this shape?
+    let function_body = format_function_body(ctx, function_body, false, shape.reset()); // TODO: do we want to reset this shape?
 
-    // Need to insert any additional trivia, as it isn't being inserted elsewhere
-    #[cfg(feature = "luau")]
-    {
-        let (parameters_parentheses, return_type) = match function_body.return_type() {
-            Some(return_type) => (
-                function_body.parameters_parentheses().to_owned(),
-                Some(
-                    return_type.update_trailing_trivia(FormatTriviaType::Append(vec![
-                        create_newline_trivia(ctx),
-                    ])),
-                ),
-            ),
-            None => (
-                // No return type, so add trivia to the parentheses instead
-                function_body
-                    .parameters_parentheses()
-                    .update_trailing_trivia(FormatTriviaType::Append(vec![create_newline_trivia(
-                        ctx,
-                    )])),
-                None,
-            ),
-        };
-
-        function_body = function_body
-            .with_parameters_parentheses(parameters_parentheses)
-            .with_return_type(return_type);
-    }
-
-    #[cfg(not(feature = "luau"))]
-    {
-        let parameters_parentheses = function_body
-            .parameters_parentheses()
-            .update_trailing_trivia(FormatTriviaType::Append(vec![create_newline_trivia(ctx)]));
-        function_body = function_body.with_parameters_parentheses(parameters_parentheses);
-    };
-
-    let end_token = function_body
-        .end_token()
-        .update_leading_trivia(FormatTriviaType::Append(vec![create_indent_trivia(
-            ctx, shape,
-        )]));
-
-    (function_token, function_body.with_end_token(end_token))
+    (function_token, function_body)
 }
 
 /// Formats a Call node
@@ -443,16 +401,24 @@ pub fn format_function_args<'ast>(
     }
 }
 
+fn is_block_empty(block: &Block) -> bool {
+    block.stmts().next().is_none() && block.last_stmt().is_none()
+}
+
 /// Formats a FunctionBody node
 pub fn format_function_body<'ast>(
     ctx: &Context,
     function_body: &FunctionBody<'ast>,
-    add_trivia: bool,
+    add_trivia_after_end: bool,
     shape: Shape,
 ) -> FunctionBody<'ast> {
     // Calculate trivia
     let leading_trivia = vec![create_indent_trivia(ctx, shape)];
     let trailing_trivia = vec![create_newline_trivia(ctx)];
+
+    // If the FunctionBody block is empty, then don't add a newline after the parameters, but add a space:
+    // `function() end`
+    let block_empty = is_block_empty(function_body.block());
 
     // Check if the parameters should be placed across multiple lines
     let multiline_params = {
@@ -499,11 +465,16 @@ pub fn format_function_body<'ast>(
                 types_length = 0
             }
 
-            let line_length = format_singleline_parameters(ctx, function_body, shape)
+            let mut line_length = format_singleline_parameters(ctx, function_body, shape)
                     .to_string()
                     .len()
                         + 2 // Account for the parentheses around the parameters
                         + types_length; // Account for type specifiers and return type
+
+            // If the block is empty, then the `end` will be inlined. We should include this in our line length check
+            if block_empty {
+                line_length += 4 // 4 = " end"
+            }
 
             let singleline_shape = shape + line_length;
             singleline_shape.over_budget()
@@ -563,46 +534,48 @@ pub fn format_function_body<'ast>(
         return_type = match function_body.return_type() {
             Some(return_type) => Some({
                 let formatted = format_type_specifier(ctx, return_type, shape);
-                if add_trivia {
-                    added_trailing_trivia = true;
-                    formatted.update_trailing_trivia(FormatTriviaType::Append(
-                        trailing_trivia.to_owned(),
-                    ))
+                added_trailing_trivia = true;
+                formatted.update_trailing_trivia(FormatTriviaType::Append(if block_empty {
+                    vec![Token::new(TokenType::spaces(1))]
                 } else {
-                    formatted
-                }
+                    trailing_trivia.to_owned()
+                }))
             }),
             None => None,
         };
     }
 
-    if !added_trailing_trivia && add_trivia {
-        parameters_parentheses = parameters_parentheses
-            .update_trailing_trivia(FormatTriviaType::Append(trailing_trivia.to_owned()))
+    if !added_trailing_trivia {
+        parameters_parentheses = parameters_parentheses.update_trailing_trivia(
+            FormatTriviaType::Append(if block_empty {
+                vec![Token::new(TokenType::spaces(1))]
+            } else {
+                trailing_trivia.to_owned()
+            }),
+        )
     }
 
     let block_shape = shape.reset().increment_block_indent();
     let block = format_block(ctx, function_body.block(), block_shape);
 
-    let end_token = if add_trivia {
-        format_end_token(
-            ctx,
-            function_body.end_token(),
-            EndTokenType::BlockEnd,
-            shape,
-        )
-        .update_trivia(
-            FormatTriviaType::Append(leading_trivia),
-            FormatTriviaType::Append(trailing_trivia),
-        )
-    } else {
-        format_end_token(
-            ctx,
-            function_body.end_token(),
-            EndTokenType::BlockEnd,
-            shape,
-        )
-    };
+    let (end_token_leading_trivia, end_token_trailing_trivia) = (
+        match block_empty {
+            true => FormatTriviaType::NoChange,
+            false => FormatTriviaType::Append(leading_trivia),
+        },
+        match add_trivia_after_end {
+            true => FormatTriviaType::Append(trailing_trivia),
+            false => FormatTriviaType::NoChange,
+        },
+    );
+
+    let end_token = format_end_token(
+        ctx,
+        function_body.end_token(),
+        EndTokenType::BlockEnd,
+        shape,
+    )
+    .update_trivia(end_token_leading_trivia, end_token_trailing_trivia);
 
     let function_body = function_body
         .to_owned()

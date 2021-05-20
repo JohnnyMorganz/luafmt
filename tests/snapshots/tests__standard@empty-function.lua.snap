@@ -1,0 +1,11 @@
+---
+source: tests/tests.rs
+expression: format(&contents)
+
+---
+local function noop() end
+
+function noop() end
+
+call(function() end)
+

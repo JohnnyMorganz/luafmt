@@ -1,3 +1,5 @@
+function foo(foooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo, barrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr) end
+
 function foo(foooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo, barrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr)
 end
 

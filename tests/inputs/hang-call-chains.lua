@@ -1,10 +1,11 @@
-Promise.new():andThen(callThis):andThen(function() end):andThen()
+Promise.new():andThen(callThis):andThen(function() print("test") end):andThen()
 
 Promise.new():andThen(callThis):andThen({
     true
   }):andThen()
 
 this.is.a.large.start:andThen():andThen(function()
+	print("test")
 end):andThen()
 
 local f = this:andThen(callThis):andThen({

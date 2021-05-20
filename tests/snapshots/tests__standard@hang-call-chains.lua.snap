@@ -6,6 +6,7 @@ expression: format(&contents)
 Promise.new()
 	:andThen(callThis)
 	:andThen(function()
+		print("test")
 	end)
 	:andThen()
 
@@ -19,6 +20,7 @@ Promise.new()
 this.is.a.large.start
 	:andThen()
 	:andThen(function()
+		print("test")
 	end)
 	:andThen()
 
