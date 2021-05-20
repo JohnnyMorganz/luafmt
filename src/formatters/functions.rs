@@ -20,8 +20,8 @@ use crate::{
             format_token_reference, EndTokenType,
         },
         trivia::{
-            strip_leading_trivia, strip_trivia, FormatTriviaType, UpdateLeadingTrivia,
-            UpdateTrailingTrivia, UpdateTrivia,
+            strip_leading_trivia, strip_trailing_trivia, strip_trivia, FormatTriviaType,
+            UpdateLeadingTrivia, UpdateTrailingTrivia, UpdateTrivia,
         },
         trivia_util,
     },
@@ -141,26 +141,43 @@ pub fn format_function_args<'ast>(
                             Expression::Value { value, .. } => {
                                 match &**value {
                                     // Check to see if we have a table constructor, or anonymous function
-                                    Value::Function(_) => {
-                                        // If we have a mixture of multiline args, and other arguments
-                                        // Then the function args should be expanded
-                                        if seen_multiline_arg && seen_other_arg_after_multiline {
-                                            is_multiline = true;
-                                            break;
+                                    Value::Function((_, function_body)) => {
+                                        // Check to see whether it has been expanded
+                                        let is_expanded = strip_trailing_trivia(function_body)
+                                            .to_string()
+                                            .contains('\n');
+                                        if is_expanded {
+                                            // If we have a mixture of multiline args, and other arguments
+                                            // Then the function args should be expanded
+                                            if seen_multiline_arg && seen_other_arg_after_multiline
+                                            {
+                                                is_multiline = true;
+                                                break;
+                                            }
+
+                                            seen_multiline_arg = true;
+
+                                            // First check the top line of the anonymous function (i.e. the function token and any parameters)
+                                            // If this is over budget, then we should expand
+                                            singleline_shape =
+                                                singleline_shape.take_first_line(value);
+                                            if singleline_shape.over_budget() {
+                                                is_multiline = true;
+                                                break;
+                                            }
+
+                                            // Reset the shape onto a new line // 3 = "end" for the function line
+                                            singleline_shape = singleline_shape.reset() + 3;
+                                        } else {
+                                            // We have a collapsed function (normally indicitive of a noop function)
+                                            // add the width, and if it fails, we need to expand
+                                            singleline_shape =
+                                                singleline_shape + argument.to_string().len();
+                                            if singleline_shape.over_budget() {
+                                                is_multiline = true;
+                                                break;
+                                            }
                                         }
-
-                                        seen_multiline_arg = true;
-
-                                        // First check the top line of the anonymous function (i.e. the function token and any parameters)
-                                        // If this is over budget, then we should expand
-                                        singleline_shape = singleline_shape.take_first_line(value);
-                                        if singleline_shape.over_budget() {
-                                            is_multiline = true;
-                                            break;
-                                        }
-
-                                        // Reset the shape onto a new line // 3 = "end" for the function line
-                                        singleline_shape = singleline_shape.reset() + 3;
                                     }
                                     Value::TableConstructor(table) => {
                                         // Check to see whether it has been expanded
